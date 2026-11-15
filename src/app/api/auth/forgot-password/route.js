@@ -1,0 +1,72 @@
+import { NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { users } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import { generateOTP } from '@/lib/auth';
+import { sendPasswordResetEmail } from '@/lib/email';
+import { forgotPasswordSchema } from '@/lib/validations';
+import { formatZodErrorResponse } from '@/lib/zod-utils';
+import { checkRateLimit, getClientIP } from '@/lib/rateLimit';
+
+export async function POST(request) {
+  try {
+    const ip = getClientIP(request);
+    const rateCheck = await checkRateLimit(`forgot-password:${ip}`, 5, 15 * 60);
+    if (!rateCheck.success) {
+      return NextResponse.json(
+        { error: 'Too many password reset requests. Please try again later.' },
+        { status: 429 }
+      );
+    }
+
+    const body = await request.json();
+    const result = forgotPasswordSchema.safeParse(body);
+    if (!result.success) {
+      return NextResponse.json(
+        formatZodErrorResponse(result, 'Invalid email address'),
+        { status: 400 }
+      );
+    }
+
+    const { email } = result.data;
+    const cleanEmail = email.toLowerCase().trim();
+
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, cleanEmail))
+      .limit(1);
+
+    if (!user) {
+      // Don't reveal if email exists for security privacy
+      return NextResponse.json({
+        message: 'If an account exists with this email, a password reset code has been sent.',
+      });
+    }
+
+    const resetOtp = generateOTP();
+    const resetOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
+    await db
+      .update(users)
+      .set({
+        resetOtp,
+        resetOtpExpiresAt,
+        resetOtpAttempts: 0,
+      })
+      .where(eq(users.id, user.id));
+
+    const emailResult = await sendPasswordResetEmail(cleanEmail, resetOtp);
+    if (!emailResult.success) {
+      console.error('[Forgot Password] Email send failure:', emailResult.error);
+      return NextResponse.json({ error: 'Password reset email could not be sent. Please try again later.' }, { status: 503 });
+    }
+
+    return NextResponse.json({
+      message: 'If an account exists with this email, a password reset code has been sent.',
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 });
+  }
+}

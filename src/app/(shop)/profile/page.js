@@ -1,0 +1,709 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { useRouter } from 'next/navigation';
+import { selectUser, selectAuthLoading, setUser, clearUser } from '@/lib/store/authSlice';
+import { useToast } from '@/components/ui/Toast';
+import Breadcrumbs from '@/components/ui/Breadcrumbs';
+import ImageUpload from '@/components/ui/ImageUpload';
+import PhoneInput from '@/components/ui/PhoneInput';
+import FieldError from '@/components/ui/FieldError';
+import PasswordInput from '@/components/ui/PasswordInput';
+import UserAvatar from '@/components/ui/UserAvatar';
+import FormField, { ReadOnlyField } from '@/components/ui/FormField';
+import { VerifiedBadge } from '@/components/ui/Badges';
+import OtpModal from '@/components/ui/OtpModal';
+import { useMsg91Otp } from '@/hooks/useMsg91Otp';
+import { updateProfileSchema, addressSchema } from '@/lib/validations';
+import { lookupPincode } from '@/lib/pincode';
+import {
+  FiUser,
+  FiMapPin,
+  FiMail,
+  FiSave,
+  FiPlus,
+  FiLoader,
+  FiLock,
+  FiSmartphone,
+} from 'react-icons/fi';
+import { profileApi } from '@/lib/apiClient/profile.api';
+import { addressesApi } from '@/lib/apiClient/addresses.api';
+
+export default function ProfilePage() {
+  const router = useRouter();
+  const dispatch = useDispatch();
+  const toast = useToast();
+  const authUser = useSelector(selectUser);
+  const authLoading = useSelector(selectAuthLoading);
+
+  const phoneOtp = useMsg91Otp({ verifyAccessToken: profileApi.verifyPhoneOtp });
+  const [activeTab, setActiveTab] = useState('profile');
+  const [profileData, setProfileData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    avatarUrl: '',
+    phoneVerified: false,
+    isPhoneAuth: false,
+  });
+  const [profileErrors, setProfileErrors] = useState({});
+
+  const [addresses, setAddresses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  // Phone OTP States (strictly for unverified email accounts)
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [phoneOtpInput, setPhoneOtpInput] = useState('');
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+
+  const [showAddAddr, setShowAddAddr] = useState(false);
+  const [addrForm, setAddrForm] = useState({
+    label: '',
+    line1: '',
+    line2: '',
+    city: '',
+    state: '',
+    pincode: '',
+    phone: '',
+  });
+  const [addrErrors, setAddrErrors] = useState({});
+  const [addrSaving, setAddrSaving] = useState(false);
+
+  // Password states
+  const [passwordData, setPasswordData] = useState({ currentPassword: '', newPassword: '' });
+  const [passwordErrors, setPasswordErrors] = useState({});
+  const [passwordSaving, setPasswordSaving] = useState(false);
+
+  // Pincode auto-fill states
+  const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [pincodeNote, setPincodeNote] = useState('');
+
+  useEffect(() => {
+    const pincode = addrForm.pincode.trim();
+    if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setPincodeLoading(true);
+      setPincodeNote('');
+      const res = await lookupPincode(pincode);
+      setPincodeLoading(false);
+      if (res && (res.city || res.state)) {
+        setAddrForm((prev) => ({
+          ...prev,
+          city: res.city || prev.city,
+          state: res.state || prev.state,
+        }));
+      } else {
+        setPincodeNote("Couldn't auto-detect city/state. Please enter manually.");
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [addrForm.pincode]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!authUser) {
+      router.push('/login');
+      return;
+    }
+    fetchProfile();
+  }, [authUser, authLoading]);
+
+  async function fetchProfile() {
+    try {
+      const data = await profileApi.get();
+      if (data?.user) {
+        setProfileData({
+          name: data.user.name || '',
+          email: data.user.email || '',
+          phone: data.user.phone || '',
+          avatarUrl: data.user.avatarUrl || '',
+          phoneVerified: Boolean(data.user.phoneVerified),
+          isPhoneAuth: Boolean(data.user.isPhoneAuth),
+        });
+        setAddresses(data.addresses || []);
+      }
+    } catch {
+      toast.error('Failed to load profile data');
+    }
+    setLoading(false);
+  }
+
+  const isPhoneVerified = Boolean(profileData.phoneVerified || profileData.isPhoneAuth);
+
+  async function handleSendPhoneOtp() {
+    if (isPhoneVerified) {
+      toast.info('Your phone number is already verified.');
+      return;
+    }
+    if (!profileData.phone || profileData.phone.trim().length < 8) {
+      toast.error('Please enter a valid phone number first');
+      return;
+    }
+    setSendingOtp(true);
+    try {
+      const data = await phoneOtp.sendOtp(profileData.phone);
+      if (!data.success) throw new Error(data.error);
+      if (data) {
+        toast.success(data.message || 'OTP sent to mobile number');
+        if (data.demoOtp && process.env.NODE_ENV === 'development') {
+          toast.info(`Dev Mode OTP: ${data.demoOtp}`);
+        }
+        setShowPhoneModal(true);
+      }
+    } catch (err) {
+      toast.error(err.message || 'Failed to send OTP');
+    }
+    setSendingOtp(false);
+  }
+
+  async function handleVerifyPhoneOtp(e) {
+    if (e) e.preventDefault();
+    if (!phoneOtpInput || phoneOtpInput.trim().length < 4) {
+      toast.error('Please enter the OTP');
+      return;
+    }
+    setVerifyingOtp(true);
+    try {
+      const data = await phoneOtp.verifyOtp(phoneOtpInput, profileData.phone);
+      if (!data.success) throw new Error(data.error);
+      if (data) {
+        toast.success('Mobile number verified successfully!');
+        setProfileData((prev) => ({
+          ...prev,
+          phone: data.user?.phone || prev.phone,
+          phoneVerified: true,
+        }));
+        setShowPhoneModal(false);
+        setPhoneOtpInput('');
+        if (data.user) dispatch(setUser(data.user));
+      }
+    } catch (err) {
+      toast.error(err.message || 'Invalid OTP');
+    }
+    setVerifyingOtp(false);
+  }
+
+  async function handleSaveProfile(e) {
+    e.preventDefault();
+    setProfileErrors({});
+
+    const clientCheck = updateProfileSchema.safeParse({
+      name: profileData.name,
+      phone: profileData.phone || null,
+      avatarUrl: profileData.avatarUrl || null,
+    });
+
+    if (!clientCheck.success) {
+      const issues = clientCheck.error.issues;
+      const errMap = {};
+      issues.forEach((iss) => {
+        if (iss.path[0]) errMap[iss.path[0]] = iss.message;
+      });
+      setProfileErrors(errMap);
+      toast.error('Please fix validation errors');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const data = await profileApi.update({
+        name: profileData.name,
+        phone: profileData.phone,
+        avatarUrl: profileData.avatarUrl,
+      });
+      if (data) {
+        toast.success('Profile updated!');
+        if (data.user) {
+          dispatch(setUser(data.user));
+          setProfileData((prev) => ({
+            ...prev,
+            name: data.user.name || '',
+            phone: data.user.phone || '',
+            phoneVerified: Boolean(data.user.phoneVerified),
+            isPhoneAuth: Boolean(data.user.isPhoneAuth),
+          }));
+        }
+      }
+    } catch (err) {
+      if (err.errors) setProfileErrors(err.errors);
+      toast.error(err.message || 'Failed to update profile');
+    }
+    setSaving(false);
+  }
+
+  async function handlePasswordChange(e) {
+    e.preventDefault();
+    setPasswordErrors({});
+
+    if (!passwordData.currentPassword) {
+      setPasswordErrors({ currentPassword: 'Current password is required' });
+      return;
+    }
+    if (!passwordData.newPassword || passwordData.newPassword.length < 6) {
+      setPasswordErrors({ newPassword: 'New password must be at least 6 characters' });
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const data = await profileApi.changePassword(passwordData);
+      if (data) {
+        toast.success(data.message || 'Password updated successfully!');
+        setPasswordData({ currentPassword: '', newPassword: '' });
+        dispatch(clearUser());
+        router.push('/login?redirect=/profile');
+      }
+    } catch (err) {
+      if (err.errors) setPasswordErrors(err.errors);
+      toast.error(err.message || 'Failed to update password');
+    }
+    setPasswordSaving(false);
+  }
+
+  async function handleAddAddress(e) {
+    e.preventDefault();
+    setAddrErrors({});
+
+    const clientCheck = addressSchema.safeParse(addrForm);
+    if (!clientCheck.success) {
+      const issues = clientCheck.error.issues;
+      const errMap = {};
+      issues.forEach((iss) => {
+        if (iss.path[0]) errMap[iss.path[0]] = iss.message;
+      });
+      setAddrErrors(errMap);
+      toast.error('Please fix address validation errors');
+      return;
+    }
+
+    setAddrSaving(true);
+    try {
+      const data = await addressesApi.create(addrForm);
+      if (data) {
+        toast.success('Address added!');
+        setAddrForm({ label: '', line1: '', line2: '', city: '', state: '', pincode: '', phone: '' });
+        setShowAddAddr(false);
+        fetchProfile();
+      }
+    } catch (err) {
+      if (err.errors) setAddrErrors(err.errors);
+      toast.error(err.message || 'Failed to add address');
+    }
+    setAddrSaving(false);
+  }
+
+  if (loading || authLoading) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-8 text-center">
+        <div className="w-6 h-6 border-2 border-warm-900/20 border-t-warm-900 rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-warm-500 text-[12px] font-medium">Loading account details...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+      <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'My Account' }]} />
+
+      <h1 className="text-lg font-bold text-warm-900 tracking-tight mb-5">My Account</h1>
+
+      {/* Navigation Tabs */}
+      <div className="flex border-b border-warm-200 mb-5">
+        <button
+          onClick={() => setActiveTab('profile')}
+          className={`flex items-center gap-1.5 pb-2 px-3 font-semibold text-[12px] border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'profile'
+              ? 'border-warm-900 text-warm-900'
+              : 'border-transparent text-warm-500 hover:text-warm-700'
+          }`}
+        >
+          <FiUser className="w-3.5 h-3.5" /> Personal Profile
+        </button>
+        <button
+          onClick={() => setActiveTab('addresses')}
+          className={`flex items-center gap-1.5 pb-2 px-3 font-semibold text-[12px] border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'addresses'
+              ? 'border-warm-900 text-warm-900'
+              : 'border-transparent text-warm-500 hover:text-warm-700'
+          }`}
+        >
+          <FiMapPin className="w-3.5 h-3.5" /> Saved Addresses ({addresses.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('security')}
+          className={`flex items-center gap-1.5 pb-2 px-3 font-semibold text-[12px] border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'security'
+              ? 'border-warm-900 text-warm-900'
+              : 'border-transparent text-warm-500 hover:text-warm-700'
+          }`}
+        >
+          <FiLock className="w-3.5 h-3.5" /> Security & Password
+        </button>
+      </div>
+
+      {/* Tab 1: Profile Form */}
+      {activeTab === 'profile' && (
+        <div className="bg-white p-4 sm:p-5 rounded-md border border-warm-200 shadow-xs max-w-lg">
+          <form onSubmit={handleSaveProfile} className="space-y-4">
+            {/* Avatar Uploader with UserAvatar Fallback */}
+            <div className="border-b border-warm-100 pb-3.5">
+              <label className="block text-[10px] font-semibold text-warm-700 uppercase tracking-wider mb-1.5">
+                Profile Picture
+              </label>
+              <div className="flex items-center gap-3 mb-2.5">
+                <UserAvatar
+                  src={profileData.avatarUrl}
+                  name={profileData.name}
+                  phone={profileData.phone}
+                  size="xl"
+                  className="border-2 border-warm-200"
+                />
+                <div>
+                  <p className="text-[11px] font-semibold text-warm-900">Upload new avatar</p>
+                  <p className="text-[10px] text-warm-500">Supports JPG, PNG or WEBP up to 10MB</p>
+                </div>
+              </div>
+              <ImageUpload
+                uploadType="avatar"
+                value={profileData.avatarUrl ? [profileData.avatarUrl] : []}
+                onChange={(urls) => {
+                  const url = Array.isArray(urls) ? urls[0] || '' : urls || '';
+                  setProfileData((prev) => ({ ...prev, avatarUrl: url }));
+                }}
+                multiple={false}
+                maxFiles={1}
+                label=""
+              />
+            </div>
+
+            {/* Name Input */}
+            <FormField
+              id="profile-name-input"
+              label="Full Name"
+              required
+              error={profileErrors.name}
+            >
+              <div className="relative">
+                <FiUser className="absolute left-3 top-1/2 -translate-y-1/2 text-warm-400 w-3.5 h-3.5 pointer-events-none" />
+                <input
+                  id="profile-name-input"
+                  type="text"
+                  value={profileData.name}
+                  onChange={(e) => {
+                    setProfileData({ ...profileData, name: e.target.value });
+                    if (profileErrors.name) setProfileErrors((prev) => ({ ...prev, name: null }));
+                  }}
+                  className={`w-full pl-8 pr-3 py-1.5 border rounded-md text-[11px] bg-white outline-none transition-all ${
+                    profileErrors.name ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                  placeholder="Your full name"
+                  required
+                />
+              </div>
+            </FormField>
+
+            {/* Email (Read-Only) */}
+            <ReadOnlyField
+              label="Email Address"
+              value={profileData.email || 'Not set (Phone authenticated user)'}
+              icon={<FiMail className="w-3.5 h-3.5" />}
+              helperText={!profileData.email ? 'Signed in via mobile number' : undefined}
+            />
+
+            {/* Phone Number Field */}
+            {isPhoneVerified ? (
+              /* Verified Phone: Locked read-only with Verified badge */
+              <ReadOnlyField
+                label="Mobile Number"
+                value={profileData.phone}
+                icon={<FiSmartphone className="w-3.5 h-3.5" />}
+                badge={<VerifiedBadge isVerified={true} showLabel={true} />}
+                helperText="Verified mobile number linked to your account."
+              />
+            ) : (
+              /* Unverified Phone: Editable with Verify Phone Number CTA */
+              <FormField
+                id="profile-phone-input"
+                label="Mobile Number (Optional)"
+                error={profileErrors.phone}
+                badge={
+                  profileData.phone && (
+                    <button
+                      type="button"
+                      onClick={handleSendPhoneOtp}
+                      disabled={sendingOtp}
+                      className="text-[10px] font-bold text-brand-600 hover:text-brand-700 hover:underline cursor-pointer disabled:opacity-50"
+                    >
+                      {sendingOtp ? 'Sending OTP...' : 'Verify Phone Number →'}
+                    </button>
+                  )
+                }
+              >
+                <PhoneInput
+                  value={profileData.phone}
+                  onChange={(val) => {
+                    setProfileData({ ...profileData, phone: val, phoneVerified: false });
+                    if (profileErrors.phone) setProfileErrors((prev) => ({ ...prev, phone: null }));
+                  }}
+                  error={profileErrors.phone}
+                />
+              </FormField>
+            )}
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-warm-900 text-white font-semibold text-[11px] rounded-md hover:bg-warm-800 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+            >
+              <FiSave className="w-3.5 h-3.5" />
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </form>
+
+          {/* Modal for Unverified Mobile OTP Verification */}
+          {!isPhoneVerified && showPhoneModal && (
+            <OtpModal
+              isOpen={showPhoneModal}
+              onClose={() => setShowPhoneModal(false)}
+              title="Verify Mobile Number"
+              subtitle={`Enter the 6-digit verification code sent to ${profileData.phone}.`}
+              otp={phoneOtpInput}
+              onChange={setPhoneOtpInput}
+              onSubmit={handleVerifyPhoneOtp}
+              loading={verifyingOtp}
+              showDevWarning={process.env.NODE_ENV === 'development'}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Tab: Security & Password Change */}
+      {activeTab === 'security' && (
+        <div className="bg-white p-4 sm:p-5 rounded-md border border-warm-200 shadow-xs max-w-lg">
+          <h2 className="text-[13px] font-bold text-warm-900 border-b border-warm-100 pb-2 mb-3.5">
+            Change Account Password
+          </h2>
+          <form onSubmit={handlePasswordChange} className="space-y-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-warm-700 uppercase tracking-wider mb-1">
+                Current Password *
+              </label>
+              <PasswordInput
+                value={passwordData.currentPassword}
+                onChange={(e) => {
+                  setPasswordData({ ...passwordData, currentPassword: e.target.value });
+                  if (passwordErrors.currentPassword) setPasswordErrors((prev) => ({ ...prev, currentPassword: null }));
+                }}
+                placeholder="Enter current password"
+                required
+              />
+              <FieldError message={passwordErrors.currentPassword} />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-semibold text-warm-700 uppercase tracking-wider mb-1">
+                New Password *
+              </label>
+              <PasswordInput
+                value={passwordData.newPassword}
+                onChange={(e) => {
+                  setPasswordData({ ...passwordData, newPassword: e.target.value });
+                  if (passwordErrors.newPassword) setPasswordErrors((prev) => ({ ...prev, newPassword: null }));
+                }}
+                placeholder="Enter new password (min. 6 characters)"
+                required
+              />
+              <FieldError message={passwordErrors.newPassword} />
+            </div>
+
+            <button
+              type="submit"
+              disabled={passwordSaving}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-warm-900 text-white font-semibold text-[11px] rounded-md hover:bg-warm-800 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+            >
+              <FiSave className="w-3.5 h-3.5" />
+              {passwordSaving ? 'Updating...' : 'Update Password'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Tab 2: Addresses */}
+      {activeTab === 'addresses' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-[13px] font-bold text-warm-900">Delivery Addresses</h2>
+            <button
+              onClick={() => setShowAddAddr(!showAddAddr)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-warm-900 text-white text-[11px] font-semibold rounded-md hover:bg-warm-800 transition-colors cursor-pointer shadow-2xs"
+            >
+              <FiPlus className="w-3.5 h-3.5" /> Add New Address
+            </button>
+          </div>
+
+          {showAddAddr && (
+            <form onSubmit={handleAddAddress} className="grid grid-cols-2 gap-2.5 p-3.5 bg-white border border-warm-200 rounded-md shadow-xs">
+              <div className="col-span-2">
+                <input
+                  value={addrForm.label}
+                  onChange={(e) => {
+                    setAddrForm({ ...addrForm, label: e.target.value });
+                    if (addrErrors.label) setAddrErrors((prev) => ({ ...prev, label: null }));
+                  }}
+                  placeholder="Label (Home, Office)"
+                  className={`w-full px-2.5 py-1.5 border rounded-md text-[11px] bg-white outline-none ${
+                    addrErrors.label ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                />
+                <FieldError message={addrErrors.label} />
+              </div>
+
+              <div className="col-span-2">
+                <input
+                  value={addrForm.line1}
+                  onChange={(e) => {
+                    setAddrForm({ ...addrForm, line1: e.target.value });
+                    if (addrErrors.line1) setAddrErrors((prev) => ({ ...prev, line1: null }));
+                  }}
+                  placeholder="Address Line 1 *"
+                  className={`w-full px-2.5 py-1.5 border rounded-md text-[11px] bg-white outline-none ${
+                    addrErrors.line1 ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                  required
+                />
+                <FieldError message={addrErrors.line1} />
+              </div>
+
+              <div className="col-span-2">
+                <input
+                  value={addrForm.line2}
+                  onChange={(e) => setAddrForm({ ...addrForm, line2: e.target.value })}
+                  placeholder="Address Line 2"
+                  className="w-full px-2.5 py-1.5 border border-warm-200 rounded-md text-[11px] bg-white outline-none focus:border-warm-900"
+                />
+              </div>
+
+              {/* Pincode Field with Loader */}
+              <div className="col-span-2 relative">
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={addrForm.pincode}
+                  onChange={(e) => {
+                    setAddrForm({ ...addrForm, pincode: e.target.value });
+                    if (addrErrors.pincode) setAddrErrors((prev) => ({ ...prev, pincode: null }));
+                  }}
+                  placeholder="6-Digit Pincode * (Auto-fills City & State)"
+                  className={`w-full px-2.5 py-1.5 pr-8 border rounded-md text-[11px] bg-white outline-none ${
+                    addrErrors.pincode ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                  required
+                />
+                {pincodeLoading && (
+                  <FiLoader className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-warm-500 animate-spin" />
+                )}
+                <FieldError message={addrErrors.pincode} />
+              </div>
+
+              {pincodeNote && (
+                <p className="col-span-2 text-[10px] text-amber-700 font-medium">
+                  {pincodeNote}
+                </p>
+              )}
+
+              <div>
+                <input
+                  value={addrForm.city}
+                  onChange={(e) => {
+                    setAddrForm({ ...addrForm, city: e.target.value });
+                    if (addrErrors.city) setAddrErrors((prev) => ({ ...prev, city: null }));
+                  }}
+                  placeholder="City *"
+                  className={`w-full px-2.5 py-1.5 border rounded-md text-[11px] bg-white outline-none ${
+                    addrErrors.city ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                  required
+                />
+                <FieldError message={addrErrors.city} />
+              </div>
+
+              <div>
+                <input
+                  value={addrForm.state}
+                  onChange={(e) => {
+                    setAddrForm({ ...addrForm, state: e.target.value });
+                    if (addrErrors.state) setAddrErrors((prev) => ({ ...prev, state: null }));
+                  }}
+                  placeholder="State *"
+                  className={`w-full px-2.5 py-1.5 border rounded-md text-[11px] bg-white outline-none ${
+                    addrErrors.state ? 'border-red-500 bg-red-50/20' : 'border-warm-200 focus:border-warm-900'
+                  }`}
+                  required
+                />
+                <FieldError message={addrErrors.state} />
+              </div>
+
+              <div className="col-span-2">
+                <PhoneInput
+                  label="Contact Phone for Delivery"
+                  value={addrForm.phone}
+                  onChange={(val) => {
+                    setAddrForm({ ...addrForm, phone: val });
+                    if (addrErrors.phone) setAddrErrors((prev) => ({ ...prev, phone: null }));
+                  }}
+                  error={addrErrors.phone}
+                />
+              </div>
+
+              <div className="col-span-2 flex gap-2 pt-1.5">
+                <button
+                  type="submit"
+                  disabled={addrSaving}
+                  className="px-3 py-1.5 bg-warm-900 text-white text-[11px] font-semibold rounded-md hover:bg-warm-800 disabled:opacity-50 transition-colors cursor-pointer shadow-2xs"
+                >
+                  {addrSaving ? 'Saving...' : 'Save Address'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddAddr(false)}
+                  className="px-3 py-1.5 border border-warm-200 text-[11px] font-semibold rounded-md text-warm-600 hover:bg-warm-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            {addresses.length === 0 ? (
+              <p className="text-warm-400 text-[11px] col-span-2 py-6 text-center bg-white rounded-md border border-warm-200 shadow-xs">
+                No saved addresses yet.
+              </p>
+            ) : (
+              addresses.map((addr) => (
+                <div key={addr.id} className="p-3.5 bg-white rounded-md border border-warm-200 shadow-xs text-[11px] space-y-1">
+                  {addr.label && (
+                    <span className="text-[10px] font-bold text-warm-900 uppercase tracking-wider block mb-1">
+                      {addr.label}
+                    </span>
+                  )}
+                  <p className="font-semibold text-warm-900">{addr.line1}</p>
+                  {addr.line2 && <p className="text-warm-600">{addr.line2}</p>}
+                  <p className="text-warm-600">{addr.city}, {addr.state} — {addr.pincode}</p>
+                  {addr.phone && <p className="text-[10px] text-warm-400 mt-1.5">Phone: {addr.phone}</p>}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
