@@ -26,7 +26,6 @@ const path = require('node:path');
       await route.fulfill({ json: data });
     });
     await page.route('https://api.postalpincode.in/**', (route) => route.fulfill({ json: [{ Status: 'Success', PostOffice: [{ District: 'Delhi', State: 'Delhi' }] }] }));
-    await page.route('https://checkout.razorpay.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: '' }));
     const base = process.env.APP_TEST_URL || 'http://127.0.0.1:3001';
     await page.goto(base + '/login');
     const country = page.getByRole('combobox', { name: 'Country Dial Code' });

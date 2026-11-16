@@ -34,7 +34,6 @@ import { trackContact, trackInitiateCheckout, trackAddPaymentInfo, trackPurchase
 import { trackBeginCheckout, trackPurchase as trackGAPurchase, trackContact as trackGAContact } from '@/lib/ga';
 import PhoneInput from '@/components/ui/PhoneInput';
 import FieldError from '@/components/ui/FieldError';
-import Script from 'next/script';
 import Breadcrumbs from '@/components/ui/Breadcrumbs';
 import { formatCurrency } from '@/lib/utils';
 import { settingsApi } from '@/lib/apiClient/settings.api';
@@ -68,8 +67,7 @@ export default function CheckoutPage() {
   });
   const [addrLoading, setAddrLoading] = useState(false);
   const [paying, setPaying] = useState(false);
-  const [selectedPaymentMethod, setPaymentMethod] = useState('razorpay');
-  const [razorpayLoaded, setRazorpayLoaded] = useState(false);
+  const [selectedPaymentMethod, setPaymentMethod] = useState('cod');
 
   // checkoutMode: 'account' | 'prompt' | 'guest'
   const [guestCheckoutMode, setCheckoutMode] = useState('prompt');
@@ -103,7 +101,7 @@ export default function CheckoutPage() {
   const nonCodItems = items.filter((item) => item.codAvailable === false);
   const isCodAvailable = storeSettings.codEnabled && nonCodItems.length === 0;
 
-  const paymentMethod = selectedPaymentMethod === 'cod' && !isCodAvailable ? 'razorpay' : selectedPaymentMethod;
+  const paymentMethod = selectedPaymentMethod === 'cod' && !isCodAvailable ? (storeSettings.whatsappNumber?.trim() ? 'whatsapp' : '') : selectedPaymentMethod;
 
   const discount = coupon
     ? coupon.type === 'percent'
@@ -249,6 +247,7 @@ export default function CheckoutPage() {
   }
 
   async function handleCheckout() {
+    if (!paymentMethod) { toast.error('No ordering method is available. Please contact the store.'); return; }
     const isGuestOrder = !user || checkoutMode === 'guest';
 
     if (isGuestOrder) {
@@ -304,7 +303,7 @@ ${addonsSubtotal > 0 ? `*Add-ons Subtotal:* ₹${addonsSubtotal.toFixed(2)}\n` :
 *Shipping Fee:* ₹${shippingFee.toFixed(2)}
 ${discount > 0 ? `*Discount:* -₹${discount.toFixed(2)}\n` : ''}*Total Amount:* ₹${total.toFixed(2)}
 ----------------------------------
-Hi! I'd like to place this order via WhatsApp. Please confirm item availability and send payment details.`;
+Hi! I'd like to place this order via WhatsApp. Please confirm item availability and delivery details.`;
 
       const waNumber = storeSettings?.whatsappNumber?.trim();
       if (!waNumber) {
@@ -378,8 +377,8 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
         return;
       }
 
-      // Pure COD without online advance required
-      if (createData.isCod && !createData.requiresAdvance) {
+      if (!createData.isCod || createData.requiresAdvance) throw new Error('Unexpected order response');
+      {
         checkoutCompleted.current = true;
         sessionStorage.removeItem('hoda_checkout_attempt');
         recordPurchase(createData.orderId, items, Number(createData.totalAmount));
@@ -390,55 +389,6 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
         return;
       }
 
-      // Online Razorpay Payment (Either full payment OR COD Advance token payment)
-      const options = {
-        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-        amount: createData.amount,
-        currency: 'INR',
-        name: 'TrendVibes',
-        description: createData.requiresAdvance ? `COD Advance Payment (₹${createData.codAdvanceAmount})` : 'Order Payment',
-        order_id: createData.razorpayOrderId,
-        handler: async function (response) {
-          try {
-            const verifyData = await paymentsApi.verify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature: response.razorpay_signature,
-              orderId: createData.orderId,
-            });
-            const finalOrderId = verifyData?.orderId || createData.orderId;
-            checkoutCompleted.current = true;
-            sessionStorage.removeItem('hoda_checkout_attempt');
-            recordPurchase(finalOrderId, items, Number(createData.totalAmount));
-            dispatch(clearCart());
-            toast.success(createData.requiresAdvance ? 'COD advance paid! Order confirmed.' : 'Payment successful! Order placed.');
-            const accessCode = verifyData?.accessCode || createData.accessCode;
-            const redirectUrl = `/orders/${finalOrderId}${accessCode ? `?accessCode=${accessCode}` : ''}`;
-            router.push(redirectUrl);
-          } catch (err) {
-            toast.error(err.message || 'Payment verification failed');
-          }
-          setPaying(false);
-        },
-        prefill: {
-          name: isGuestOrder ? guestForm.name : user?.name,
-          email: isGuestOrder ? guestForm.email : user?.email,
-        },
-        theme: { color: '#18181b' },
-        modal: {
-          ondismiss: () => {
-            toast.warning('Payment window closed. Order is pending.');
-            setPaying(false);
-          },
-        },
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.on('payment.failed', () => {
-        toast.error('Payment failed. Please try again.');
-        setPaying(false);
-      });
-      rzp.open();
     } catch (err) {
       toast.error('Checkout error. Please try again.');
       setPaying(false);
@@ -458,7 +408,6 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
 
   return (
     <>
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" onReady={() => setRazorpayLoaded(true)} />
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-4">
         <Breadcrumbs items={[{ label: 'Home', href: '/' }, { label: 'Cart', href: '/cart' }, { label: 'Checkout' }]} />
@@ -804,31 +753,7 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
                     <FiCreditCard className="w-3.5 h-3.5 text-warm-900" /> Payment Method
                   </h2>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {/* Razorpay Online Option */}
-                    <label
-                      className={`flex items-center gap-2 p-3 rounded-md border cursor-pointer transition-all ${
-                        paymentMethod === 'razorpay'
-                          ? 'border-warm-900 bg-warm-50/50 shadow-xs ring-1 ring-warm-900/10'
-                          : 'border-warm-200 hover:border-warm-300'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="paymentMethod"
-                        value="razorpay"
-                        checked={paymentMethod === 'razorpay'}
-                        onChange={() => setPaymentMethod('razorpay')}
-                        className="accent-warm-900 w-3.5 h-3.5"
-                      />
-                      <div>
-                        <p className="text-[11px] font-bold text-warm-900 flex items-center gap-1">
-                          <FiCreditCard className="w-3 h-3 text-warm-700" /> Online Payment
-                        </p>
-                        <p className="text-[10px] text-warm-500 mt-0.5">UPI, Cards, NetBanking</p>
-                      </div>
-                    </label>
-
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {/* Cash on Delivery Option */}
                     {isCodAvailable && (
                       <label
@@ -895,6 +820,8 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
                       </p>
                     </div>
                   )}
+
+                  {!paymentMethod && <p className="text-sm text-red-600">Ordering is currently unavailable. Please contact the store.</p>}
 
                   {/* WhatsApp Info Notice */}
                   {paymentMethod === 'whatsapp' && (
@@ -991,7 +918,7 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
 
                   <button
                     onClick={handleCheckout}
-                    disabled={paying || (paymentMethod === 'razorpay' && !razorpayLoaded)}
+                    disabled={paying || !paymentMethod}
                     className={`mt-4 w-full flex items-center justify-center gap-1.5 py-2.5 text-white font-bold text-[11px] rounded-md transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-xs cursor-pointer ${
                       paymentMethod === 'whatsapp'
                         ? 'bg-emerald-600 hover:bg-emerald-700'
@@ -1006,13 +933,9 @@ Hi! I'd like to place this order via WhatsApp. Please confirm item availability 
                           <>
                             <FiMessageSquare className="w-3.5 h-3.5" /> Checkout via WhatsApp
                           </>
-                        ) : paymentMethod === 'cod' ? (
-                          <>
-                            <FiTruck className="w-3.5 h-3.5" /> Place COD Order ({formatCurrency(total)})
-                          </>
                         ) : (
                           <>
-                            <FiCreditCard className="w-3.5 h-3.5" /> Pay {formatCurrency(total)} Online
+                            <FiTruck className="w-3.5 h-3.5" /> Place COD Order ({formatCurrency(total)})
                           </>
                         )}
                       </>

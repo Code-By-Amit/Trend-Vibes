@@ -10,7 +10,7 @@ const faqs = [
   },
   {
     q: 'What payment methods do you accept?',
-    a: 'We accept Cash on Delivery (COD) and all major credit cards, debit cards, UPI, and net banking via Razorpay.',
+    a: 'You can place a Cash on Delivery order where available, or contact us through WhatsApp to place an order.',
   },
   {
     q: 'How can I track my order status?',

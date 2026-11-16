@@ -226,7 +226,7 @@ export const createOrderSchema = z.object({
   checkoutKey: z.string().uuid().optional(),
   expectedTotal: z.number().finite().nonnegative().optional(),
   addressId: z.string().uuid('Invalid address ID').optional().nullable(),
-  paymentMethod: z.enum(['razorpay', 'cod']).default('razorpay'),
+  paymentMethod: z.literal('cod').default('cod'),
   couponCode: z.string().max(50).optional().nullable(),
   isGuest: z.boolean().optional(),
   guestName: z.string().max(255).optional().nullable(),

@@ -6,7 +6,7 @@ export default function AnnouncementBar() {
     { Icon: Percent, text: 'Exclusive Online Deals' },
     { Icon: Zap, text: 'Fast Express Delivery' },
     { Icon: Gift, text: 'New Season Arrivals' },
-    { Icon: ShieldCheck, text: 'Secure Payments Guaranteed' },
+    { Icon: ShieldCheck, text: 'Easy Ordering' },
   ];
 
   const doubled = [...messages, ...messages];

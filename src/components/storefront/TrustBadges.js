@@ -7,7 +7,7 @@ export default async function TrustBadges() {
 const settings = await getCachedStoreSettings();
 const badges = [
   { icon: FiTruck, title: 'Free Shipping', desc: `On orders of ${formatCurrency(Number(settings.minFreeShipping ?? 50))} or more` },
-  { icon: FiShield, title: 'Secure Payments', desc: '100% secure checkout' },
+  { icon: FiShield, title: 'Easy Ordering', desc: 'Order online or contact our team' },
   { icon: FiRefreshCw, title: 'Easy Exchanges', desc: '48-hour exchange & store credit (no cash refunds)', href: '/returns' },
   { icon: FiHeadphones, title: 'Customer Support', desc: 'Contact our team for help' },
 ];

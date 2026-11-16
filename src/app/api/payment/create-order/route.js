@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import Razorpay from 'razorpay';
 import { db } from '@/lib/db';
 import { products, coupons, orders, orderItems, orderStatusHistory, storeSettings, productAddons, orderItemAddons, addons, addresses } from '@/lib/db/schema';
 import { eq, and, inArray, sql, gte } from 'drizzle-orm';
@@ -11,17 +10,6 @@ import { sendOrderConfirmationEmail, sendAdminNewOrderEmail } from '@/lib/email'
 import { checkRateLimit, getClientIP } from '@/lib/rateLimit';
 
 import { resolveAddonPricing } from '@/lib/addon-utils';
-
-const razorpayKeyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
-
-let razorpay = null;
-if (razorpayKeyId && razorpayKeySecret) {
-  razorpay = new Razorpay({
-    key_id: razorpayKeyId,
-    key_secret: razorpayKeySecret,
-  });
-}
 
 export async function POST(request) {
   try {
@@ -42,7 +30,7 @@ export async function POST(request) {
     const {
       items,
       addressId,
-      paymentMethod = 'razorpay',
+      paymentMethod = 'cod',
       couponCode,
       isGuest,
       guestName,
@@ -236,10 +224,6 @@ export async function POST(request) {
     if (expectedTotal !== undefined && Math.abs(expectedTotal - totalAmount) > 0.009) {
       return NextResponse.json({ error: 'Prices or shipping changed. Your cart has been refreshed; review the total before ordering.', cartUpdates: dbProducts.map((product) => ({ productId: product.id, price: product.price, discountPrice: product.discountPrice, codAvailable: product.codAvailable, addons: dbAddonLinks.filter((link) => link.productId === product.id).map((link) => resolveAddonPricing(link, link)) })), totalAmount }, { status: 409 });
     }
-    const amountInPaise = Math.round(totalAmount * 100);
-    if (paymentMethod === 'razorpay' && (!razorpay || amountInPaise < 100)) return NextResponse.json({ error: 'Online payment is unavailable for this order. Please contact support.' }, { status: 400 });
-    // Creating an unpaid gateway order does not reserve stock. All store writes commit together.
-    const gatewayOrder = paymentMethod === 'razorpay' ? await razorpay.orders.create({ amount: amountInPaise, currency: 'INR', receipt: 'checkout_' + crypto.randomBytes(10).toString('hex') }) : null;
     let createdNow = false;
     const order = await db.transaction(async (tx) => {
       if (checkoutKey) {
@@ -255,19 +239,19 @@ export async function POST(request) {
         const updated = await tx.update(products).set({ stock: sql`${products.stock} - ${item.quantity}`, unitsSold: sql`${products.unitsSold} + ${item.quantity}`, isOutOfStock: sql`CASE WHEN ${products.stock} - ${item.quantity} <= 0 THEN true ELSE ${products.isOutOfStock} END` }).where(and(eq(products.id, item.productId), eq(products.isActive, true), eq(products.isOutOfStock, false), gte(products.stock, item.quantity))).returning();
         if (!updated.length) throw new Error('Insufficient stock for ' + item.name + '. Please update your cart.');
       }
-      const [created] = await tx.insert(orders).values({ userId: user?.id || null, guestName: guestName || user?.name || null, guestEmail: guestEmail || user?.email || null, guestPhone: guestPhone || shippingAddress.phone, shippingAddress, status: 'pending', paymentStatus: 'pending', paymentMethod, courierProvider: 'manual', shippingCharge: shippingCharge.toFixed(2), totalAmount: totalAmount.toFixed(2), addressId: addressId || null, couponCode: validCouponCode, discountAmount: discount.toFixed(2), codAdvanceAmount: '0.00', razorpayOrderId: gatewayOrder?.id || null, accessCode: !user ? crypto.randomBytes(24).toString('hex') : null, checkoutKey: checkoutKey || null }).returning();
+      const [created] = await tx.insert(orders).values({ userId: user?.id || null, guestName: guestName || user?.name || null, guestEmail: guestEmail || user?.email || null, guestPhone: guestPhone || shippingAddress.phone, shippingAddress, status: 'pending', paymentStatus: 'pending', paymentMethod, courierProvider: 'manual', shippingCharge: shippingCharge.toFixed(2), totalAmount: totalAmount.toFixed(2), addressId: addressId || null, couponCode: validCouponCode, discountAmount: discount.toFixed(2), codAdvanceAmount: '0.00', accessCode: !user ? crypto.randomBytes(24).toString('hex') : null, checkoutKey: checkoutKey || null }).returning();
       for (const item of validatedItems) {
         const [inserted] = await tx.insert(orderItems).values({ orderId: created.id, productId: item.productId, productName: item.name, productImage: item.image, quantity: item.quantity, priceAtPurchase: item.priceAtPurchase }).returning();
         if (item.addons.length) await tx.insert(orderItemAddons).values(item.addons.map((addon) => ({ ...addon, orderItemId: inserted.id })));
       }
-      await tx.insert(orderStatusHistory).values({ orderId: created.id, status: 'pending', note: paymentMethod === 'cod' ? 'COD order placed; awaiting store confirmation.' : 'Checkout initialized; stock reserved while awaiting payment.' });
+      await tx.insert(orderStatusHistory).values({ orderId: created.id, status: 'pending', note: 'COD order placed; awaiting store confirmation.' });
       createdNow = true;
       return created;
     });
     if (createdNow && paymentMethod === 'cod') {
       await Promise.allSettled([order.guestEmail ? sendOrderConfirmationEmail(order.guestEmail, order, validatedItems, shippingAddress) : Promise.resolve(), settings?.contactEmail ? sendAdminNewOrderEmail(settings.contactEmail, order, validatedItems) : Promise.resolve()]);
     }
-    return NextResponse.json({ orderId: order.id, accessCode: order.accessCode, razorpayOrderId: order.razorpayOrderId, amount: Math.round(Number(order.totalAmount) * 100), totalAmount: Number(order.totalAmount), subtotal, discount, shippingCharge, isCod: paymentMethod === 'cod', requiresAdvance: false });
+    return NextResponse.json({ orderId: order.id, accessCode: order.accessCode, amount: Math.round(Number(order.totalAmount) * 100), totalAmount: Number(order.totalAmount), subtotal, discount, shippingCharge, isCod: paymentMethod === 'cod', requiresAdvance: false });
 
   } catch (error) {
     if (error.message === 'Unauthorized') {
@@ -280,11 +264,6 @@ export async function POST(request) {
       error?.description ||
       error?.message ||
       (typeof error === 'string' ? error : 'Failed to create order');
-
-    if (error?.statusCode === 401 || errorMessage === 'Authentication failed') {
-      errorMessage =
-        'Razorpay Authentication Failed: Invalid NEXT_PUBLIC_RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET in .env.local. Please provide valid Razorpay API keys.';
-    }
 
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }

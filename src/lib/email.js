@@ -149,7 +149,7 @@ export async function sendOrderConfirmationEmail(toEmail, order, items = [], add
 
           <div style="background-color: #f9fafb; padding: 16px; border-radius: 12px; margin-bottom: 24px;">
             <p style="margin:0 0 4px 0; font-size: 12px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Payment Method</p>
-            <p style="margin:0; font-size: 14px; font-weight: 700; color: #111827; text-transform: uppercase;">${order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Razorpay Online Payment'}</p>
+            <p style="margin:0; font-size: 14px; font-weight: 700; color: #111827; text-transform: uppercase;">${order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Online payment (previous order)'}</p>
             ${order.paymentMethod === 'cod' ? `<p style="margin:8px 0 0 0; font-size: 13px; font-weight: 600; color: #15803d;">You'll receive a confirmation call from us shortly to confirm your order.</p>` : ''}
           </div>
 

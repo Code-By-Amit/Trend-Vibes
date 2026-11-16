@@ -135,7 +135,7 @@ export default function InvoicePage() {
           <div style={{ width: '48%', flex: '1 1 0%' }}>
             <h3 className="font-bold text-warm-900 uppercase tracking-wider text-[10px] mb-2">Payment Details</h3>
             <div className="text-warm-700 space-y-1">
-              <p>Method: <strong className="uppercase">{order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Razorpay'}</strong></p>
+              <p>Method: <strong className="uppercase">{order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Online payment (previous order)'}</strong></p>
               <p>Payment Status: <span className="font-semibold uppercase text-brand-600">{order.paymentStatus}</span></p>
               <p>Order Status: <span className="font-semibold uppercase">{order.status}</span></p>
               {order.razorpayPaymentId && <p className="font-mono text-[10px] text-warm-500">Payment ID: {order.razorpayPaymentId}</p>}

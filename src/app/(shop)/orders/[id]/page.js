@@ -12,7 +12,6 @@ import Breadcrumbs from '@/components/ui/Breadcrumbs';
 import { formatCurrency } from '@/lib/utils';
 import ImageUpload from '@/components/ui/ImageUpload';
 import { Frown, Package, Star } from 'lucide-react';
-import Script from 'next/script';
 import {
   FiPackage,
   FiCheck,
@@ -26,7 +25,6 @@ import {
   FiStar,
 } from 'react-icons/fi';
 import { ordersApi } from '@/lib/apiClient/orders.api';
-import { paymentsApi } from '@/lib/apiClient/payments.api';
 import { productsApi } from '@/lib/apiClient/products.api';
 
 const statusSteps = ['pending', 'confirmed', 'packed', 'shipped', 'delivered'];
@@ -54,8 +52,6 @@ export default function OrderDetailPage() {
   const [returnEvidenceUrl, setReturnEvidenceUrl] = useState('');
   const [returning, setReturning] = useState(false);
 
-  const [retryingPayment, setRetryingPayment] = useState(false);
-  const [razorpayLoaded, setRazorpayLoaded] = useState(false);
 
   // Delivered Item Review State
   const [reviewModalItem, setReviewModalItem] = useState(null);
@@ -132,65 +128,6 @@ export default function OrderDetailPage() {
       toast.error(err.message || 'Failed to submit return');
     }
     setReturning(false);
-  }
-
-  const isPaymentEligibleForRetry =
-    order?.paymentMethod === 'razorpay' &&
-    order?.paymentStatus === 'pending' &&
-    order?.status !== 'cancelled';
-
-  async function handleRetryPayment() {
-    setRetryingPayment(true);
-    try {
-      const data = await paymentsApi.retry(order.id);
-      if (!data) {
-        toast.error('Failed to start payment retry');
-        setRetryingPayment(false);
-        return;
-      }
-
-      const options = {
-        key: data.key || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-        amount: data.amount,
-        currency: 'INR',
-        name: 'TrendVibes',
-        description: `Payment for Order #${order.id.slice(0, 8)}`,
-        order_id: data.razorpayOrderId,
-        handler: async function (response) {
-          try {
-            await paymentsApi.verify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature: response.razorpay_signature,
-              orderId: order.id,
-            });
-            toast.success('Payment successful!');
-            fetchOrder();
-          } catch (err) {
-            toast.error(err.message || 'Payment verification failed');
-          }
-          setRetryingPayment(false);
-        },
-        prefill: { name: user?.name, email: user?.email },
-        theme: { color: '#18181b' },
-        modal: {
-          ondismiss: () => {
-            toast.warning('Payment window closed');
-            setRetryingPayment(false);
-          },
-        },
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.on('payment.failed', () => {
-        toast.error('Payment failed. Please try again.');
-        setRetryingPayment(false);
-      });
-      rzp.open();
-    } catch (err) {
-      toast.error(err.message || 'Error opening payment window');
-      setRetryingPayment(false);
-    }
   }
 
   async function handleSubmitReview(e) {
@@ -280,17 +217,6 @@ export default function OrderDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {isPaymentEligibleForRetry && (
-            <button
-              onClick={handleRetryPayment}
-              disabled={retryingPayment || !razorpayLoaded}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-warm-900 text-white text-[11px] font-semibold rounded-md hover:bg-warm-800 transition-colors shadow-xs disabled:opacity-60"
-            >
-              <FiCreditCard className="w-3.5 h-3.5 text-amber-400" />
-              {retryingPayment ? 'Opening Payment...' : 'Pay Now'}
-            </button>
-          )}
-
           <Link
             href={`/orders/${order.id}/invoice${typeof window !== 'undefined' ? window.location.search : ''}`}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-warm-200 text-warm-800 text-[11px] font-semibold rounded-md hover:bg-warm-50 transition-colors shadow-xs"
@@ -329,10 +255,14 @@ export default function OrderDetailPage() {
               Cash on Delivery Order Placed
             </h3>
             <p className="text-[11px] text-emerald-800 font-medium leading-relaxed mt-0.5">
-              You&apos;ll receive a confirmation call from our customer executive, and advance payment may be required.
+              Your order is awaiting store confirmation. Payment is due on delivery.
             </p>
           </div>
         </div>
+      )}
+
+      {order.paymentMethod !== 'cod' && ['pending', 'failed'].includes(order.paymentStatus) && order.status !== 'cancelled' && (
+        <div className="mb-4 p-3 rounded-md border border-amber-200 bg-amber-50 text-sm text-amber-900">Online payment is no longer available. Please contact the store about this previous order.</div>
       )}
 
       {/* Return Status Banner */}
@@ -345,26 +275,6 @@ export default function OrderDetailPage() {
             <p className="font-bold text-[10px] uppercase tracking-wider">Return Status: {order.returnStatus}</p>
             {order.returnReason && <p className="text-[10px] mt-1 text-warm-700">Reason: {order.returnReason}</p>}
           </div>
-        </div>
-      )}
-
-      {/* Payment Retry Banner */}
-      {isPaymentEligibleForRetry && (
-        <div className="p-3 bg-amber-50 border border-amber-200 rounded-md mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="font-bold text-amber-900 text-[11px]">Payment Pending for Order #{order.id.slice(0, 8)}</h3>
-            <p className="text-[10px] text-amber-700 mt-0.5">
-              Your order is placed, but online payment is incomplete. Click &quot;Complete Payment&quot; below to finish paying via Razorpay.
-            </p>
-          </div>
-          <button
-            onClick={handleRetryPayment}
-            disabled={retryingPayment || !razorpayLoaded}
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-warm-900 text-white text-[11px] font-bold rounded-md hover:bg-warm-800 transition-colors shrink-0 disabled:opacity-60 shadow-xs"
-          >
-            <FiCreditCard className="w-3.5 h-3.5 text-amber-400" />
-            {retryingPayment ? 'Opening Payment...' : `Complete Payment (${formatCurrency(order.totalAmount)})`}
-          </button>
         </div>
       )}
 
@@ -552,7 +462,7 @@ export default function OrderDetailPage() {
               <div className="flex justify-between">
                 <span className="text-warm-500">Payment Method</span>
                 <span className="text-warm-900 uppercase font-semibold text-[10px]">
-                  {order.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Razorpay'}
+                  {order.paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online payment (previous order)'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -772,7 +682,6 @@ export default function OrderDetailPage() {
         </form>
       </Modal>
 
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" onReady={() => setRazorpayLoaded(true)} />
     </div>
   );
 }

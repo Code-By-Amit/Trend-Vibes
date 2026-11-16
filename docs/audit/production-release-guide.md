@@ -4,7 +4,7 @@ The local release now builds and its migrations are applied. This document ident
 
 ## Deploy the verified source
 
-1. Confirm the final HTTPS domain and hosting service/plan. Set `NEXT_PUBLIC_APP_URL` to that domain before building. Update Google callbacks, MSG91 allowed domains, and Razorpay webhook URLs to match.
+1. Confirm the final HTTPS domain and hosting service/plan. Set `NEXT_PUBLIC_APP_URL` to that domain before building. Update Google callbacks and MSG91 allowed domains to match.
 2. Transfer the required secrets securely to the deployment environment. Do not commit `.env.local` or print secret values in logs. `CRON_SECRET` was newly generated locally and needs to be configured on the deployment and the scheduler with the same value.
 3. Include `prod-ca-2021.crt` in the deployed application, or configure `DATABASE_SSL_CA` with its PEM contents / `DATABASE_SSL_CA_FILE` with a readable deployed path. This is a public trust certificate, not a private key. Application and migration connections enforce certificate verification. The current Next payment route trace includes the root certificate.
 4. Run `npm run check:production` against deployment environment values. This checks configuration presence/modes only, not actual service delivery.
@@ -13,7 +13,7 @@ The local release now builds and its migrations are applied. This document ident
 
 ## Verify providers and recovery
 
-- Complete Razorpay **test-mode** success/failure/retry and duplicate/out-of-order webhook journeys in a separate test environment. Current local configuration contains live payment credentials; automated browser checks therefore mock payments and do not create charges. Verify capture amount/currency, reservation expiry, late-capture reconciliation, and operator refunds.
+- Test COD checkout and WhatsApp handoff with controlled test data. WhatsApp handoffs are not stored as website orders; staff must confirm them manually.
 - Verify MSG91 phone delivery, identity binding, rejection/replay, and Google sign-in on the final domain.
 - Verify Resend sender/domain, OTP/reset delivery, order confirmations, and support-form failure recovery using controlled recipients. Missing provider configuration now fails instead of claiming email delivery.
 - Verify your manual shipping and dispatch procedures. Checkout accepts six-digit Indian pincode formats; it does not verify carrier coverage or promise a delivery date.

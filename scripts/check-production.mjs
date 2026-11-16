@@ -14,8 +14,6 @@ check('Redis abuse protection', present('REDIS_URL') && /^rediss?:\/\//.test(env
 let publicUrl;
 try { publicUrl = new URL(env.NEXT_PUBLIC_APP_URL); } catch { /* report below */ }
 check('Public production URL', publicUrl?.protocol === 'https:' && !/localhost|127\.0\.0\.1|ngrok|trycloudflare/.test(publicUrl.hostname), 'Set NEXT_PUBLIC_APP_URL to your final HTTPS domain and rebuild.');
-check('Live payment key', /^rzp_live_/.test(env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '') && present('RAZORPAY_KEY_SECRET'), 'Configure the matching live Razorpay key pair after completing test-mode payment checks.');
-check('Dedicated payment webhook secret', present('RAZORPAY_WEBHOOK_SECRET') && env.RAZORPAY_WEBHOOK_SECRET !== env.RAZORPAY_KEY_SECRET, 'Configure the webhook signing secret separately from the API secret.');
 check('Email provider', present('RESEND_API_KEY') && present('FROM_EMAIL') && !env.FROM_EMAIL.includes('resend.dev'), 'Configure Resend and a verified sender domain.');
 check('Phone authentication', ['MSG91_AUTH_KEY', 'NEXT_PUBLIC_MSG91_WIDGET_ID', 'NEXT_PUBLIC_MSG91_TOKEN_AUTH'].every(present), 'Configure MSG91 server credentials and the authorized widget.');
 check('Google authentication', ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].every(present), 'Configure OAuth credentials and final-domain callbacks.');
